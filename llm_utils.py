@@ -257,6 +257,64 @@ Practical and specific. Max 500 words. Return only Markdown."""
         raise Exception(f"Strategy failed: {e}")
 
 
+def enrich_from_github_llm(cv_data: Dict) -> Dict:
+    """
+    Given GitHub/LinkedIn scraped data, use LLM to intelligently fill:
+    - Inferred job title, experience entries, enriched skills, professional summary.
+    """
+    name      = cv_data.get('name', '')
+    bio       = cv_data.get('github_bio', '') or cv_data.get('linkedin_about', '')
+    title     = cv_data.get('current_title', '')
+    skills    = ', '.join(cv_data.get('skills', [])[:15])
+    projects  = cv_data.get('projects', [])
+    years     = cv_data.get('years_experience', 0)
+    languages = ', '.join(cv_data.get('github_stats', {}).get('languages', []))
+
+    proj_summary = '\n'.join(
+        f"- {p['name']} ({p.get('language','')}): {p.get('description','')[:100]}"
+        for p in projects[:6]
+    )
+
+    prompt = f"""You are a professional CV writer. Based on this developer's GitHub/LinkedIn data, create realistic CV content.
+
+Developer: {name}
+Inferred Title: {title or 'Software Developer'}
+Bio: {bio[:300] if bio else 'Not provided'}
+GitHub Languages: {languages}
+Detected Skills: {skills}
+Years Experience: {years or 'Unknown'}
+Top Projects:
+{proj_summary if proj_summary else 'No projects found'}
+
+Generate ONLY valid JSON (no markdown):
+{{
+  "current_title": "Most appropriate job title",
+  "summary": "Professional CV summary, 60-80 words, third person, no I/my, ATS-optimized, mentions top 3 skills and impact",
+  "skills": ["skill1", "skill2"],
+  "experience": [
+    {{
+      "title": "Software Developer / Open Source Contributor",
+      "company": "Freelance / Self-Employed",
+      "duration": "2022 - Present",
+      "description": "Built and maintained multiple open-source projects using [languages]. Developed [specific project] achieving [outcome]."
+    }}
+  ],
+  "education": []
+}}
+
+Rules:
+- Experience must reflect their ACTUAL GitHub projects realistically
+- Skills must match actual languages and project topics
+- Summary must be compelling and specific to their stack
+- Return ONLY JSON"""
+
+    try:
+        raw = _groq_call([{"role": "user", "content": prompt}], max_tokens=1200, temperature=0.5)
+        return _parse_json(raw)
+    except Exception as e:
+        raise Exception(f"GitHub enrichment failed: {e}")
+
+
 def generate_hr_emails_llm(cv_data: Dict, company: str, role: str, hr_name: str = "Hiring Manager") -> Dict:
     """Generate all 4 email templates using LLM."""
     name   = cv_data.get('name','Candidate')
