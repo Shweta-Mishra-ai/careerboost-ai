@@ -144,8 +144,45 @@ section[data-testid="stSidebar"] h3{color:#fff!important;font-family:var(--fh)!i
 from utils import (
     parse_cv, analyze_ats, generate_optimized_cv, generate_portfolio,
     generate_skills_roadmap, parse_pdf, parse_txt,
-    enrich_cv_with_external_data, find_hr_contacts, generate_hr_email_templates,
 )
+
+# New functions — safe import with fallbacks
+try:
+    from utils import enrich_cv_with_external_data
+except ImportError:
+    def enrich_cv_with_external_data(cv_data, github_url='', linkedin_url=''):
+        if github_url: cv_data['github'] = github_url
+        if linkedin_url: cv_data['linkedin'] = linkedin_url
+        return cv_data
+
+try:
+    from utils import find_hr_contacts
+except ImportError:
+    def find_hr_contacts(company, role=''):
+        slug = company.lower().replace(' ','')
+        return [
+            {'type':'email_pattern','email':f'hr@{slug}.com','company':company,'note':'Common pattern'},
+            {'type':'email_pattern','email':f'careers@{slug}.com','company':company,'note':'Common pattern'},
+            {'type':'email_pattern','email':f'talent@{slug}.com','company':company,'note':'Common pattern'},
+            {'type':'linkedin_search','title':'Technical Recruiter','company':company,
+             'linkedin_search_url':f'https://www.linkedin.com/search/results/people/?keywords=Technical+Recruiter+{company.replace(" ","+")}',
+             'action':'Search on LinkedIn'},
+        ]
+
+try:
+    from utils import generate_hr_email_templates
+except ImportError:
+    def generate_hr_email_templates(cv_data, company, role, hr_name='Hiring Manager'):
+        name = cv_data.get('name','Candidate')
+        email = cv_data.get('email','')
+        title = cv_data.get('current_title','Professional')
+        skills = ', '.join(cv_data.get('skills',[])[:5])
+        return {
+            'cold_email': f"Subject: {role} Application — {name}\n\nDear {hr_name},\n\nI'm a {title} with expertise in {skills} and I'm very interested in the {role} role at {company}.\n\nI'd love to discuss how my background aligns with your team's needs. My CV is attached.\n\nBest regards,\n{name}\n{email}",
+            'follow_up_1': f"Subject: Following Up — {role} — {name}\n\nDear {hr_name},\n\nFollowing up on my application for {role} at {company} sent last week. Still very interested — happy to provide any additional info.\n\nBest,\n{name}\n{email}",
+            'follow_up_2': f"Subject: Final Follow-Up — {role} — {name}\n\nHi {hr_name},\n\nOne last follow-up on the {role} position. If timing isn't right, I'd love to be considered for future openings.\n\nThank you,\n{name}",
+            'thank_you': f"Subject: Thank You — {role} Interview — {name}\n\nDear {hr_name},\n\nThank you for the interview today. I'm very excited about joining {company} and confident my skills in {skills} will add real value.\n\nLooking forward to next steps!\n\n{name}\n{email}",
+        }
 
 
 # ─────────────────────────────────────────────
