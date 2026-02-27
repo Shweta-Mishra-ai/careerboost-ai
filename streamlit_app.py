@@ -147,26 +147,6 @@ from utils import (
 )
 
 try:
-    from utils import build_cv_from_urls
-except ImportError:
-    def build_cv_from_urls(github_url='', linkedin_url='', extra_info=None):
-        from utils import enrich_cv_with_external_data
-        extra = extra_info or {}
-        cv_data = {
-            'name': extra.get('name','').strip() or 'Professional',
-            'email': extra.get('email','').strip(),
-            'phone': extra.get('phone','').strip(),
-            'location': extra.get('location','').strip(),
-            'current_title': extra.get('title','').strip(),
-            'years_experience': int(extra.get('years_exp', 0) or 0),
-            'skills': [], 'experience': [], 'education': [],
-            'projects': [], 'certifications': [],
-            'linkedin': linkedin_url, 'github': github_url,
-            'raw_text': f"GitHub: {github_url} LinkedIn: {linkedin_url}",
-        }
-        return enrich_cv_with_external_data(cv_data, github_url, linkedin_url)
-
-try:
     from utils import enrich_cv_with_external_data
 except ImportError:
     def enrich_cv_with_external_data(cv_data, github_url='', linkedin_url=''):
@@ -376,8 +356,10 @@ def main():
         input_mode = st.radio(
             "How do you want to start?",
             ["📄 Upload CV", "🔗 GitHub / LinkedIn only"],
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="input_mode_radio"
         )
+        st.session_state['_input_mode'] = input_mode
 
         cv_file = None
         github_input = ""
@@ -393,98 +375,21 @@ def main():
             linkedin_input = st.text_input("LinkedIn URL", placeholder="https://linkedin.com/in/...", key="li1")
 
         else:
-            st.markdown("**No CV needed!** Enter URLs → fields auto-fill:")
             github_input   = st.text_input("🐙 GitHub URL", placeholder="https://github.com/username", key="gh2")
             linkedin_input = st.text_input("🔗 LinkedIn URL", placeholder="https://linkedin.com/in/...", key="li2")
 
             if not github_input.strip() and not linkedin_input.strip():
-                st.warning("Enter at least one URL above")
-
-            # ── Auto-fetch preview when URL entered ──
-            fetched = {}
-            if github_input.strip() or linkedin_input.strip():
-                fetch_key = github_input.strip() + linkedin_input.strip()
-                if st.session_state.get('_prefetch_key') != fetch_key:
-                    with st.spinner("Fetching profile data…"):
-                        try:
-                            if github_input.strip():
-                                from utils import get_github_data
-                                gh = get_github_data(github_input.strip())
-                                if gh.get('username'):
-                                    fetched['name'] = gh.get('username','').replace('-',' ').replace('_',' ').title()
-                                fetched['location'] = gh.get('location','')
-                                fetched['github_bio'] = gh.get('bio','')
-                                fetched['languages'] = gh.get('languages',[])
-                                fetched['repos'] = gh.get('public_repos',0)
-                        except Exception:
-                            pass
-                        try:
-                            if linkedin_input.strip():
-                                from utils import get_linkedin_data
-                                li = get_linkedin_data(linkedin_input.strip())
-                                if li.get('name'): fetched['name'] = li['name']
-                                if li.get('headline'): fetched['title'] = li['headline']
-                                if li.get('location'): fetched['location'] = li['location']
-                                if li.get('about'): fetched['about'] = li['about']
-                        except Exception:
-                            pass
-                    st.session_state['_prefetch_data'] = fetched
-                    st.session_state['_prefetch_key']  = fetch_key
-                else:
-                    fetched = st.session_state.get('_prefetch_data', {})
-
-                # Show what was fetched
-                if fetched:
-                    found_items = []
-                    if fetched.get('name'):     found_items.append(f"👤 {fetched['name']}")
-                    if fetched.get('title'):    found_items.append(f"💼 {fetched['title']}")
-                    if fetched.get('location'): found_items.append(f"📍 {fetched['location']}")
-                    if fetched.get('languages'):found_items.append(f"💻 {', '.join(fetched['languages'][:4])}")
-                    if fetched.get('repos'):    found_items.append(f"📦 {fetched['repos']} repos")
-                    if found_items:
-                        st.success("✅ Auto-fetched:\n" + "  ".join(found_items))
-
-            # ── Show only MISSING fields ──
-            st.markdown("**Fill in what's missing:**")
-
-            # Name — show if not found
-            name_default = fetched.get('name','')
-            if name_default:
-                st.caption(f"👤 Name: **{name_default}** *(from profile)*")
-                manual_info['name'] = name_default
+                st.info("Enter GitHub and/or LinkedIn URL — everything else fetched automatically")
             else:
-                manual_info['name'] = st.text_input("Full Name *", placeholder="John Doe")
+                st.caption("✅ URLs entered — data will be fetched when you click Generate")
 
-            # Title — show if not found
-            title_default = fetched.get('title','')
-            if title_default:
-                st.caption(f"💼 Title: **{title_default}** *(from LinkedIn)*")
-                manual_info['title'] = title_default
-            else:
-                manual_info['title'] = st.text_input("Job Title *", placeholder="Software Engineer")
-
-            # Location — show if not found
-            loc_default = fetched.get('location','')
-            if loc_default:
-                st.caption(f"📍 Location: **{loc_default}** *(from profile)*")
-                manual_info['location'] = loc_default
-            else:
-                manual_info['location'] = st.text_input("Location", placeholder="Mumbai, India")
-
-            # Email — always ask (never in public profiles)
-            manual_info['email'] = st.text_input("Email *", placeholder="you@email.com")
-
-            # Phone — always ask
-            manual_info['phone'] = st.text_input("Phone", placeholder="+91 98765 43210")
-
-            # Years exp — always ask
-            manual_info['years_exp'] = st.number_input("Years Experience", min_value=0, max_value=40, value=0)
-
-            # Bio hint
-            bio_hint = fetched.get('github_bio','') or fetched.get('about','')
-            if bio_hint:
-                st.caption(f"📝 Bio found: *\"{bio_hint[:80]}…\"* — will be used in summary")
-
+            st.markdown("---")
+            # Only ask what can NEVER be on public profiles
+            st.markdown("**3 things we can't fetch:**")
+            manual_info['email']     = st.text_input("📧 Email", placeholder="you@email.com")
+            manual_info['phone']     = st.text_input("📞 Phone *(optional)*", placeholder="+91 98765 43210")
+            manual_info['years_exp'] = st.number_input("🗓 Years Experience *(optional)*", min_value=0, max_value=40, value=0)
+            # Everything else (name, title, location, bio, skills, projects) — fetched silently
 
         cv_template = st.selectbox("CV Template", ["Modern", "Harvard"])
 
@@ -522,8 +427,8 @@ def main():
 
     # ── PROCESSING ──
     if go:
-        input_mode_val = input_mode  # "📄 Upload CV" or "🔗 GitHub / LinkedIn only"
-        using_urls_only = (input_mode_val != "📄 Upload CV")
+        input_mode_val = st.session_state.get('_input_mode', '📄 Upload CV')
+        using_urls_only = (input_mode_val == "🔗 GitHub / LinkedIn only")
 
         # Validation
         if not using_urls_only and not cv_file:
@@ -549,26 +454,140 @@ def main():
 
             # ── MODE 1: URL-only (no CV) ──
             if using_urls_only and needs_reparse:
-                st.write("🌐 Fetching data from GitHub / LinkedIn…")
+                gh_data, li_data = {}, {}
+
+                # Step 1: Fetch GitHub silently
+                if github_input.strip():
+                    st.write("🐙 Fetching GitHub profile + repos…")
+                    try:
+                        from utils import get_github_data
+                        gh_data = get_github_data(github_input.strip())
+                        repos_n = len(gh_data.get('projects', []))
+                        langs   = ', '.join(gh_data.get('languages', [])[:4])
+                        st.write(f"   ✅ GitHub: {repos_n} repos · {langs}")
+                    except Exception as e:
+                        st.write(f"   ⚠️ GitHub fetch failed: {e}")
+
+                # Step 2: Fetch LinkedIn silently
+                if linkedin_input.strip():
+                    st.write("🔗 Fetching LinkedIn profile…")
+                    try:
+                        from utils import get_linkedin_data
+                        li_data = get_linkedin_data(linkedin_input.strip())
+                        li_got  = [k for k in ['name','headline','location','about'] if li_data.get(k)]
+                        st.write(f"   ✅ LinkedIn: found {', '.join(li_got) if li_got else 'limited data (public profile only)'}")
+                    except Exception as e:
+                        st.write(f"   ⚠️ LinkedIn fetch failed: {e}")
+
+                # Step 3: Build cv_data by merging all sources — priority: LinkedIn > GitHub > manual
+                st.write("🤖 Building CV from fetched data + AI…")
                 try:
-                    from utils import build_cv_from_urls
-                    cv_data = build_cv_from_urls(
-                        github_url=github_input.strip(),
-                        linkedin_url=linkedin_input.strip(),
-                        extra_info=manual_info,
-                    )
-                    st.session_state.enrichment_done = [
-                        x for x in ['GitHub' if github_input.strip() else '',
-                                     'LinkedIn' if linkedin_input.strip() else ''] if x
-                    ]
-                    st.session_state.cv_data = cv_data
-                    st.session_state.last_cv_name = cache_key
-                    for k in ['cv_pdf','port_zip','cover_letter','interview_qa',
-                              'ats_results','roadmap_md','job_search_strategy','hr_contacts','hr_emails']:
-                        st.session_state[k] = None
-                    st.write(f"✅ Profile built — {len(cv_data.get('skills',[]))} skills, {len(cv_data.get('projects',[]))} projects")
+                    # Name: LinkedIn > GitHub username > manual > ask
+                    name = (li_data.get('name') or
+                            (gh_data.get('username','').replace('-',' ').replace('_',' ').title() if gh_data.get('username') else '') or
+                            manual_info.get('name','') or
+                            'Professional')
+
+                    # Title: LinkedIn headline > GitHub bio inferred > manual
+                    title = (li_data.get('headline') or
+                             manual_info.get('title','') or '')
+
+                    # Location: LinkedIn > GitHub > manual
+                    location = (li_data.get('location') or
+                                gh_data.get('location','') or
+                                manual_info.get('location',''))
+
+                    # Bio/About: LinkedIn > GitHub bio
+                    bio = (li_data.get('about','') or gh_data.get('bio','') or '')
+
+                    # Skills from GitHub languages + project topics
+                    from utils import SKILL_KEYWORDS
+                    skills = list(gh_data.get('languages', []))
+                    all_proj_text = ' '.join(
+                        p.get('description','') + ' ' + ' '.join(p.get('topics',[]))
+                        for p in gh_data.get('projects', [])
+                    ).lower()
+                    # Also scan LinkedIn about
+                    all_proj_text += ' ' + bio.lower()
+                    for kw in SKILL_KEYWORDS:
+                        if kw in all_proj_text and kw.title() not in skills:
+                            skills.append(kw.title())
+
+                    cv_data = {
+                        'name':             name,
+                        'email':            manual_info.get('email','').strip(),
+                        'phone':            manual_info.get('phone','').strip(),
+                        'location':         location,
+                        'current_title':    title,
+                        'years_experience': int(manual_info.get('years_exp', 0) or 0),
+                        'linkedin':         linkedin_input.strip(),
+                        'github':           github_input.strip(),
+                        'skills':           skills[:30],
+                        'experience':       [],
+                        'education':        [],
+                        'projects':         gh_data.get('projects', []),
+                        'certifications':   [],
+                        'github_bio':       gh_data.get('bio',''),
+                        'linkedin_about':   li_data.get('about',''),
+                        'github_stats': {
+                            'followers':  gh_data.get('followers', 0),
+                            'repos':      gh_data.get('public_repos', 0),
+                            'stars':      gh_data.get('total_stars', 0),
+                            'languages':  gh_data.get('languages', []),
+                        },
+                        'raw_text': f"Name: {name}\nTitle: {title}\nBio: {bio[:300]}\nSkills: {', '.join(skills[:15])}\nProjects: {', '.join(p['name'] for p in gh_data.get('projects',[])[:5])}",
+                    }
+
+                    # Step 4: LLM enrichment — generate experience, better title, summary
+                    st.write("✨ AI enriching experience + summary…")
+                    try:
+                        from llm_utils import enrich_from_github_llm
+                        enriched = enrich_from_github_llm(cv_data)
+                        if enriched:
+                            if enriched.get('current_title') and not cv_data['current_title']:
+                                cv_data['current_title'] = enriched['current_title']
+                            if enriched.get('experience'):
+                                cv_data['experience'] = enriched['experience']
+                            if enriched.get('skills'):
+                                merged = list({s.lower(): s for s in cv_data['skills'] + enriched['skills']}.values())
+                                cv_data['skills'] = merged[:30]
+                            if enriched.get('summary'):
+                                cv_data['summary'] = enriched['summary']
+                            if enriched.get('education'):
+                                cv_data['education'] = enriched['education']
+                    except Exception as e:
+                        st.write(f"   ℹ️ AI enrichment skipped: {e}")
+
+                    # Step 5: Report what we got vs what's missing
+                    got, missing_fields = [], []
+                    if cv_data['name'] != 'Professional': got.append(f"👤 {cv_data['name']}")
+                    else: missing_fields.append("name")
+                    if cv_data['current_title']: got.append(f"💼 {cv_data['current_title']}")
+                    else: missing_fields.append("job title")
+                    if cv_data['location']:  got.append(f"📍 {cv_data['location']}")
+                    if cv_data['email']:     got.append(f"📧 email")
+                    if cv_data['skills']:    got.append(f"🛠 {len(cv_data['skills'])} skills")
+                    if cv_data['projects']:  got.append(f"💻 {len(cv_data['projects'])} projects")
+                    if cv_data['experience']:got.append(f"🏢 {len(cv_data['experience'])} experience entries")
+
+                    st.write("✅ Built: " + " · ".join(got))
+                    if missing_fields:
+                        st.warning(f"⚠️ Could not find: {', '.join(missing_fields)} — add manually in sidebar if needed")
+
                 except Exception as e:
-                    st.error(f"Failed to fetch data: {e}"); return
+                    st.error(f"Build failed: {e}"); return
+
+                st.session_state.enrichment_done = [
+                    x for x in [
+                        'GitHub' if github_input.strip() else '',
+                        'LinkedIn' if linkedin_input.strip() else ''
+                    ] if x
+                ]
+                st.session_state.cv_data         = cv_data
+                st.session_state.last_cv_name    = cache_key
+                for k in ['cv_pdf','port_zip','cover_letter','interview_qa',
+                          'ats_results','roadmap_md','job_search_strategy','hr_contacts','hr_emails']:
+                    st.session_state[k] = None
 
             # ── MODE 2: CV upload ──
             elif not using_urls_only and needs_reparse:
