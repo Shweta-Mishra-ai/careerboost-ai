@@ -363,6 +363,130 @@ def enrich_cv_with_external_data(cv_data: Dict, github_url: str = '', linkedin_u
 
 
 # ─────────────────────────────────────────────
+# BUILD CV FROM SCRATCH — Only GitHub / LinkedIn
+# No CV upload needed
+# ─────────────────────────────────────────────
+
+def build_cv_from_urls(github_url: str = '', linkedin_url: str = '', extra_info: Dict = None) -> Dict:
+    """
+    Build a complete cv_data dict purely from GitHub + LinkedIn URLs.
+    extra_info = manually entered fields: name, email, phone, title, location, years_exp
+    Uses LLM to intelligently fill gaps.
+    """
+    extra = extra_info or {}
+
+    # Base skeleton
+    cv_data = {
+        'name': extra.get('name', '').strip() or 'Professional',
+        'email': extra.get('email', '').strip(),
+        'phone': extra.get('phone', '').strip(),
+        'location': extra.get('location', '').strip(),
+        'current_title': extra.get('title', '').strip(),
+        'years_experience': int(extra.get('years_exp', 0) or 0),
+        'linkedin': linkedin_url or '',
+        'github': github_url or '',
+        'skills': [],
+        'experience': [],
+        'education': [],
+        'projects': [],
+        'certifications': [],
+        'summary': '',
+        'raw_text': '',
+        'github_bio': '',
+        'linkedin_about': '',
+    }
+
+    # ── Pull GitHub data ──
+    if github_url:
+        gh = get_github_data(github_url)
+
+        # Name from GitHub if not provided
+        if cv_data['name'] in ['', 'Professional'] and gh.get('username'):
+            cv_data['name'] = gh['username'].replace('-', ' ').replace('_', ' ').title()
+
+        cv_data['github_bio'] = gh.get('bio', '') or ''
+        if not cv_data['location'] and gh.get('location'):
+            cv_data['location'] = gh['location']
+
+        # Skills from languages
+        for lang in gh.get('languages', []):
+            if lang not in cv_data['skills']:
+                cv_data['skills'].append(lang)
+
+        # Projects from repos
+        cv_data['projects'] = gh.get('projects', [])
+
+        # GitHub stats
+        cv_data['github_stats'] = {
+            'followers': gh.get('followers', 0),
+            'repos': gh.get('public_repos', 0),
+            'stars': gh.get('total_stars', 0),
+            'languages': gh.get('languages', []),
+        }
+
+        # Infer more skills from project topics + descriptions
+        all_text = ' '.join(
+            p.get('description', '') + ' ' + ' '.join(p.get('topics', []))
+            for p in cv_data['projects']
+        ).lower()
+        for kw in SKILL_KEYWORDS:
+            if kw in all_text and kw.title() not in cv_data['skills']:
+                cv_data['skills'].append(kw.title())
+
+    # ── Pull LinkedIn data ──
+    if linkedin_url:
+        li = get_linkedin_data(linkedin_url)
+        if li.get('name') and cv_data['name'] in ['', 'Professional']:
+            cv_data['name'] = li['name']
+        if li.get('headline') and not cv_data['current_title']:
+            cv_data['current_title'] = li['headline']
+        if li.get('location') and not cv_data['location']:
+            cv_data['location'] = li['location']
+        if li.get('about'):
+            cv_data['linkedin_about'] = li['about']
+            # Extract skills from about text
+            about_lower = li['about'].lower()
+            for kw in SKILL_KEYWORDS:
+                if kw in about_lower and kw.title() not in cv_data['skills']:
+                    cv_data['skills'].append(kw.title())
+
+    # ── Use LLM to generate experience + enrich everything ──
+    if cv_data['projects'] or cv_data['github_bio'] or cv_data['linkedin_about']:
+        raw_context = f"""
+Name: {cv_data['name']}
+Title: {cv_data['current_title']}
+GitHub Bio: {cv_data.get('github_bio', '')}
+LinkedIn About: {cv_data.get('linkedin_about', '')}
+GitHub Projects: {', '.join(p['name'] + ' (' + p.get('language','') + ')' for p in cv_data['projects'][:5])}
+GitHub Languages: {', '.join(cv_data['github_stats'].get('languages', []) if cv_data.get('github_stats') else [])}
+Skills detected: {', '.join(cv_data['skills'][:15])}
+Years experience: {cv_data['years_experience']}
+"""
+        cv_data['raw_text'] = raw_context
+
+        try:
+            from llm_utils import enrich_from_github_llm
+            enriched = enrich_from_github_llm(cv_data)
+            if enriched:
+                # Merge LLM enriched data carefully
+                if enriched.get('current_title') and not cv_data['current_title']:
+                    cv_data['current_title'] = enriched['current_title']
+                if enriched.get('experience'):
+                    cv_data['experience'] = enriched['experience']
+                if enriched.get('skills'):
+                    merged = list({s.lower(): s for s in cv_data['skills'] + enriched['skills']}.values())
+                    cv_data['skills'] = merged[:30]
+                if enriched.get('education') and not cv_data['education']:
+                    cv_data['education'] = enriched['education']
+                if enriched.get('summary'):
+                    cv_data['summary'] = enriched['summary']
+        except Exception:
+            pass
+
+    return cv_data
+
+
+# ─────────────────────────────────────────────
 # ATS ANALYSIS
 # ─────────────────────────────────────────────
 
