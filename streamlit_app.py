@@ -146,7 +146,26 @@ from utils import (
     generate_skills_roadmap, parse_pdf, parse_txt,
 )
 
-# New functions — safe import with fallbacks
+try:
+    from utils import build_cv_from_urls
+except ImportError:
+    def build_cv_from_urls(github_url='', linkedin_url='', extra_info=None):
+        from utils import enrich_cv_with_external_data
+        extra = extra_info or {}
+        cv_data = {
+            'name': extra.get('name','').strip() or 'Professional',
+            'email': extra.get('email','').strip(),
+            'phone': extra.get('phone','').strip(),
+            'location': extra.get('location','').strip(),
+            'current_title': extra.get('title','').strip(),
+            'years_experience': int(extra.get('years_exp', 0) or 0),
+            'skills': [], 'experience': [], 'education': [],
+            'projects': [], 'certifications': [],
+            'linkedin': linkedin_url, 'github': github_url,
+            'raw_text': f"GitHub: {github_url} LinkedIn: {linkedin_url}",
+        }
+        return enrich_cv_with_external_data(cv_data, github_url, linkedin_url)
+
 try:
     from utils import enrich_cv_with_external_data
 except ImportError:
@@ -328,7 +347,7 @@ def show_welcome():
         st.warning("⚠️ **Groq API key not set** — AI features use basic fallback. Add `GROQ_API_KEY` to `.streamlit/secrets.toml`")
     else:
         st.success("✅ AI engine ready (Groq LLaMA 3)")
-    st.info("👈 Upload CV in sidebar → click **Analyze & Generate**")
+    st.info("👈 **Two ways to start:**  \n1️⃣ Upload CV + optionally add GitHub/LinkedIn  \n2️⃣ Only paste GitHub/LinkedIn URL — CV will be generated automatically!")
 
 
 # ─────────────────────────────────────────────
@@ -345,33 +364,144 @@ def main():
     for k in ['cv_data','ats_results','cv_pdf','port_zip','roadmap_md',
               'cover_letter','interview_qa','job_results','job_query',
               'job_search_strategy','last_cv_name','last_job_hash','last_template',
-              'hr_contacts','hr_emails','enrichment_done']:
+              'hr_contacts','hr_emails','enrichment_done',
+              '_prefetch_key','_prefetch_data']:
         if k not in st.session_state:
             st.session_state[k] = None
 
     # ── SIDEBAR ──
     with st.sidebar:
-        st.markdown("### 📄 Upload Your CV")
-        cv_file = st.file_uploader("CV (PDF/DOCX/TXT)", type=['pdf','docx','doc','txt'],
-                                   help="Never stored", label_visibility="collapsed")
-        cv_template = st.selectbox("CV Template", ["Modern","Harvard"])
-        github_input  = st.text_input("GitHub URL", placeholder="https://github.com/username")
-        linkedin_input = st.text_input("LinkedIn URL", placeholder="https://linkedin.com/in/...")
+        st.markdown("### 🚀 Input Method")
+
+        input_mode = st.radio(
+            "How do you want to start?",
+            ["📄 Upload CV", "🔗 GitHub / LinkedIn only"],
+            label_visibility="collapsed"
+        )
+
+        cv_file = None
+        github_input = ""
+        linkedin_input = ""
+        manual_info = {}
+
+        if input_mode == "📄 Upload CV":
+            st.markdown("**Upload CV** *(PDF/DOCX/TXT)*")
+            cv_file = st.file_uploader("CV", type=['pdf','docx','doc','txt'],
+                                       help="Never stored", label_visibility="collapsed")
+            st.markdown("**Enrich with external data** *(optional)*")
+            github_input   = st.text_input("GitHub URL", placeholder="https://github.com/username", key="gh1")
+            linkedin_input = st.text_input("LinkedIn URL", placeholder="https://linkedin.com/in/...", key="li1")
+
+        else:
+            st.markdown("**No CV needed!** Enter URLs → fields auto-fill:")
+            github_input   = st.text_input("🐙 GitHub URL", placeholder="https://github.com/username", key="gh2")
+            linkedin_input = st.text_input("🔗 LinkedIn URL", placeholder="https://linkedin.com/in/...", key="li2")
+
+            if not github_input.strip() and not linkedin_input.strip():
+                st.warning("Enter at least one URL above")
+
+            # ── Auto-fetch preview when URL entered ──
+            fetched = {}
+            if github_input.strip() or linkedin_input.strip():
+                fetch_key = github_input.strip() + linkedin_input.strip()
+                if st.session_state.get('_prefetch_key') != fetch_key:
+                    with st.spinner("Fetching profile data…"):
+                        try:
+                            if github_input.strip():
+                                from utils import get_github_data
+                                gh = get_github_data(github_input.strip())
+                                if gh.get('username'):
+                                    fetched['name'] = gh.get('username','').replace('-',' ').replace('_',' ').title()
+                                fetched['location'] = gh.get('location','')
+                                fetched['github_bio'] = gh.get('bio','')
+                                fetched['languages'] = gh.get('languages',[])
+                                fetched['repos'] = gh.get('public_repos',0)
+                        except Exception:
+                            pass
+                        try:
+                            if linkedin_input.strip():
+                                from utils import get_linkedin_data
+                                li = get_linkedin_data(linkedin_input.strip())
+                                if li.get('name'): fetched['name'] = li['name']
+                                if li.get('headline'): fetched['title'] = li['headline']
+                                if li.get('location'): fetched['location'] = li['location']
+                                if li.get('about'): fetched['about'] = li['about']
+                        except Exception:
+                            pass
+                    st.session_state['_prefetch_data'] = fetched
+                    st.session_state['_prefetch_key']  = fetch_key
+                else:
+                    fetched = st.session_state.get('_prefetch_data', {})
+
+                # Show what was fetched
+                if fetched:
+                    found_items = []
+                    if fetched.get('name'):     found_items.append(f"👤 {fetched['name']}")
+                    if fetched.get('title'):    found_items.append(f"💼 {fetched['title']}")
+                    if fetched.get('location'): found_items.append(f"📍 {fetched['location']}")
+                    if fetched.get('languages'):found_items.append(f"💻 {', '.join(fetched['languages'][:4])}")
+                    if fetched.get('repos'):    found_items.append(f"📦 {fetched['repos']} repos")
+                    if found_items:
+                        st.success("✅ Auto-fetched:\n" + "  ".join(found_items))
+
+            # ── Show only MISSING fields ──
+            st.markdown("**Fill in what's missing:**")
+
+            # Name — show if not found
+            name_default = fetched.get('name','')
+            if name_default:
+                st.caption(f"👤 Name: **{name_default}** *(from profile)*")
+                manual_info['name'] = name_default
+            else:
+                manual_info['name'] = st.text_input("Full Name *", placeholder="John Doe")
+
+            # Title — show if not found
+            title_default = fetched.get('title','')
+            if title_default:
+                st.caption(f"💼 Title: **{title_default}** *(from LinkedIn)*")
+                manual_info['title'] = title_default
+            else:
+                manual_info['title'] = st.text_input("Job Title *", placeholder="Software Engineer")
+
+            # Location — show if not found
+            loc_default = fetched.get('location','')
+            if loc_default:
+                st.caption(f"📍 Location: **{loc_default}** *(from profile)*")
+                manual_info['location'] = loc_default
+            else:
+                manual_info['location'] = st.text_input("Location", placeholder="Mumbai, India")
+
+            # Email — always ask (never in public profiles)
+            manual_info['email'] = st.text_input("Email *", placeholder="you@email.com")
+
+            # Phone — always ask
+            manual_info['phone'] = st.text_input("Phone", placeholder="+91 98765 43210")
+
+            # Years exp — always ask
+            manual_info['years_exp'] = st.number_input("Years Experience", min_value=0, max_value=40, value=0)
+
+            # Bio hint
+            bio_hint = fetched.get('github_bio','') or fetched.get('about','')
+            if bio_hint:
+                st.caption(f"📝 Bio found: *\"{bio_hint[:80]}…\"* — will be used in summary")
+
+
+        cv_template = st.selectbox("CV Template", ["Modern", "Harvard"])
 
         st.markdown("---")
         st.markdown("### 🎯 Job Description *(optional)*")
-        job_mode = st.radio("Method", ["Paste text","Upload PDF","Paste URL"], label_visibility="collapsed")
+        job_mode = st.radio("Method", ["Paste text", "Upload PDF", "Paste URL"], label_visibility="collapsed")
         job_text_input = job_url_input = ""
         job_file_input = None
         if job_mode == "Paste text":
-            job_text_input = st.text_area("JD", height=160, placeholder="Paste job description…", label_visibility="collapsed")
+            job_text_input = st.text_area("JD", height=130, placeholder="Paste job description…", label_visibility="collapsed")
         elif job_mode == "Upload PDF":
             job_file_input = st.file_uploader("JD PDF", type=['pdf','txt'], key="jdpdf", label_visibility="collapsed")
         else:
             job_url_input = st.text_input("Job URL", placeholder="https://…", label_visibility="collapsed")
 
         st.markdown("---")
-        go = st.button("🚀 Analyze & Generate", type="primary", use_container_width=True)
+        go = st.button("🚀 Generate", type="primary", use_container_width=True)
         if st.session_state.cv_data:
             if st.button("🗑️ Clear & Start Over", use_container_width=True):
                 for k in list(st.session_state.keys()):
@@ -380,37 +510,72 @@ def main():
 
         st.markdown("---")
         st.markdown("""<div style="font-size:.7rem;color:#444;line-height:1.8;">
-        <b style="color:#666">Formats:</b> PDF · DOCX · TXT<br/>
+        <b style="color:#666">Mode 1:</b> Upload CV + enrich<br/>
+        <b style="color:#666">Mode 2:</b> GitHub/LinkedIn only<br/>
         <b style="color:#666">AI:</b> Groq LLaMA 3.1 (free)<br/>
-        <b style="color:#666">Jobs:</b> Remotive + Jobicy (live)<br/>
         <b style="color:#666">Storage:</b> None
         </div>""", unsafe_allow_html=True)
 
     # ── WELCOME ──
     if not go and not st.session_state.cv_data:
-        show_welcome()
-        return
+        show_welcome(); return
 
     # ── PROCESSING ──
     if go:
-        if not cv_file:
-            st.error("⚠️ Please upload your CV first.")
+        input_mode_val = input_mode  # "📄 Upload CV" or "🔗 GitHub / LinkedIn only"
+        using_urls_only = (input_mode_val != "📄 Upload CV")
+
+        # Validation
+        if not using_urls_only and not cv_file:
+            st.error("⚠️ Please upload your CV first, or switch to 'GitHub / LinkedIn only' mode.")
+            return
+        if using_urls_only and not github_input.strip() and not linkedin_input.strip():
+            st.error("⚠️ Please enter at least a GitHub or LinkedIn URL.")
             return
 
-        cv_name    = cv_file.name
-        jd_combined = job_text_input + job_url_input + (job_file_input.name if job_file_input else "")
-        job_hash   = hashlib.md5(jd_combined.encode()).hexdigest()
-        needs_reparse   = (cv_name != st.session_state.last_cv_name)
+        # Build cache key
+        if using_urls_only:
+            cache_key = (github_input.strip() + linkedin_input.strip() +
+                         manual_info.get('name','') + manual_info.get('title',''))
+        else:
+            cache_key = cv_file.name if cv_file else ""
+
+        jd_combined  = job_text_input + job_url_input + (job_file_input.name if job_file_input else "")
+        job_hash     = hashlib.md5(jd_combined.encode()).hexdigest()
+        needs_reparse   = (cache_key != st.session_state.last_cv_name)
         needs_reanalyze = (job_hash != st.session_state.last_job_hash)
 
         with st.status("🔍 Processing…", expanded=True) as status:
-            if needs_reparse:
+
+            # ── MODE 1: URL-only (no CV) ──
+            if using_urls_only and needs_reparse:
+                st.write("🌐 Fetching data from GitHub / LinkedIn…")
+                try:
+                    from utils import build_cv_from_urls
+                    cv_data = build_cv_from_urls(
+                        github_url=github_input.strip(),
+                        linkedin_url=linkedin_input.strip(),
+                        extra_info=manual_info,
+                    )
+                    st.session_state.enrichment_done = [
+                        x for x in ['GitHub' if github_input.strip() else '',
+                                     'LinkedIn' if linkedin_input.strip() else ''] if x
+                    ]
+                    st.session_state.cv_data = cv_data
+                    st.session_state.last_cv_name = cache_key
+                    for k in ['cv_pdf','port_zip','cover_letter','interview_qa',
+                              'ats_results','roadmap_md','job_search_strategy','hr_contacts','hr_emails']:
+                        st.session_state[k] = None
+                    st.write(f"✅ Profile built — {len(cv_data.get('skills',[]))} skills, {len(cv_data.get('projects',[]))} projects")
+                except Exception as e:
+                    st.error(f"Failed to fetch data: {e}"); return
+
+            # ── MODE 2: CV upload ──
+            elif not using_urls_only and needs_reparse:
                 st.write("📄 Parsing CV…")
                 try:
                     cv_data = parse_cv(cv_file)
-                    st.session_state.last_cv_name = cv_name
-
-                    # ── ENRICHMENT: GitHub + LinkedIn ──
+                    st.session_state.last_cv_name = cache_key
                     enrich_msgs = []
                     if github_input.strip():
                         st.write("🐙 Fetching GitHub data…")
@@ -418,7 +583,6 @@ def main():
                     if linkedin_input.strip():
                         st.write("🔗 Fetching LinkedIn data…")
                         enrich_msgs.append("LinkedIn")
-
                     if github_input.strip() or linkedin_input.strip():
                         cv_data = enrich_cv_with_external_data(
                             cv_data,
@@ -428,16 +592,16 @@ def main():
                         st.session_state.enrichment_done = enrich_msgs
                     else:
                         st.session_state.enrichment_done = None
-
                     st.session_state.cv_data = cv_data
                     for k in ['cv_pdf','port_zip','cover_letter','interview_qa',
                               'ats_results','roadmap_md','job_search_strategy','hr_contacts','hr_emails']:
                         st.session_state[k] = None
                 except Exception as e:
                     st.error(f"CV parse failed: {e}"); return
+
             else:
                 cv_data = st.session_state.cv_data
-                st.write("✅ CV cached")
+                st.write("✅ Data cached")
 
             # Job description
             job_text = None
@@ -458,7 +622,7 @@ def main():
             # ATS
             if needs_reanalyze or not st.session_state.ats_results:
                 st.write("🤖 ATS analysis…")
-                eval_text = job_text or "General Resume Quality Evaluation: clarity, metrics, professional phrasing."
+                eval_text = job_text or "General Resume Quality: clarity, skills depth, project portfolio, quantified achievements."
                 try:
                     st.session_state.ats_results = analyze_ats(st.session_state.cv_data, eval_text)
                     st.session_state.last_job_hash = job_hash
