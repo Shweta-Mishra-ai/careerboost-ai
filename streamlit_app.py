@@ -11,6 +11,15 @@ New features:
 import streamlit as st
 import hashlib
 import datetime
+import re
+import os
+
+# Load .env at module level (before anything else)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 st.set_page_config(
     page_title="CareerBoost AI",
@@ -177,10 +186,10 @@ except ImportError:
         title = cv_data.get('current_title','Professional')
         skills = ', '.join(cv_data.get('skills',[])[:5])
         return {
-            'cold_email': f"Subject: {role} Application — {name}\n\nDear {hr_name},\n\nI'm a {title} with expertise in {skills} and I'm very interested in the {role} role at {company}.\n\nI'd love to discuss how my background aligns with your team's needs. My CV is attached.\n\nBest regards,\n{name}\n{email}",
-            'follow_up_1': f"Subject: Following Up — {role} — {name}\n\nDear {hr_name},\n\nFollowing up on my application for {role} at {company} sent last week. Still very interested — happy to provide any additional info.\n\nBest,\n{name}\n{email}",
-            'follow_up_2': f"Subject: Final Follow-Up — {role} — {name}\n\nHi {hr_name},\n\nOne last follow-up on the {role} position. If timing isn't right, I'd love to be considered for future openings.\n\nThank you,\n{name}",
-            'thank_you': f"Subject: Thank You — {role} Interview — {name}\n\nDear {hr_name},\n\nThank you for the interview today. I'm very excited about joining {company} and confident my skills in {skills} will add real value.\n\nLooking forward to next steps!\n\n{name}\n{email}",
+            'cold_email': {'subject': f"{role} Application — {name}", 'body': f"Dear {hr_name},\n\nI'm a {title} with expertise in {skills} and I'm very interested in the {role} role at {company}.\n\nI'd love to discuss how my background aligns with your team's needs. My CV is attached.\n\nBest regards,\n{name}\n{email}"},
+            'follow_up_1': {'subject': f"Following Up — {role} — {name}", 'body': f"Dear {hr_name},\n\nFollowing up on my application for {role} at {company} sent last week. Still very interested — happy to provide any additional info.\n\nBest,\n{name}\n{email}"},
+            'follow_up_2': {'subject': f"Final Follow-Up — {role} — {name}", 'body': f"Hi {hr_name},\n\nOne last follow-up on the {role} position. If timing isn't right, I'd love to be considered for future openings.\n\nThank you,\n{name}"},
+            'thank_you': {'subject': f"Thank You — {role} Interview — {name}", 'body': f"Dear {hr_name},\n\nThank you for the interview today. I'm very excited about joining {company} and confident my skills in {skills} will add real value.\n\nLooking forward to next steps!\n\n{name}\n{email}"},
         }
 
 
@@ -213,15 +222,14 @@ def _mclass(s):
 
 
 def _llm_ok():
-    import os
+    # Check st.secrets safely (works on Streamlit Cloud)
     try:
-        k = st.secrets.get("GROQ_API_KEY")
-        if k: return True
-    except: pass
-    try:
-        from dotenv import load_dotenv; load_dotenv()
-    except: pass
-    return bool(os.environ.get("GROQ_API_KEY"))
+        if "GROQ_API_KEY" in st.secrets and st.secrets["GROQ_API_KEY"]:
+            return True
+    except Exception:
+        pass
+    # Check environment (works locally with .env already loaded at module level)
+    return bool(os.environ.get("GROQ_API_KEY", "").strip())
 
 
 # ─────────────────────────────────────────────
@@ -265,15 +273,28 @@ def search_jobs_jobicy(query, limit=8):
 
 
 def match_score(cv_skills, tags, jt, jd):
-    import re
+    # BUG 6 FIX: When tags=[] and jt="" (Jobicy listings without metadata),
+    # the old code gave every job a 10% floor score, filtering them all out.
+    # Now we use jd text as the primary signal when tags are missing.
     if not cv_skills: return 50
     cv = set(s.lower() for s in cv_skills)
-    s = sum(2 for t in (tags or []) if any(t.lower() in x or x in t.lower() for x in cv))
-    s += sum(1 for w in jt.lower().split() if len(w)>3 and any(w in x for x in cv))
-    jd_l = jd.lower()
+    s = 0
+    s += sum(2 for t in (tags or []) if any(t.lower() in x or x in t.lower() for x in cv))
+    s += sum(1 for w in (jt or '').lower().split() if len(w) > 3 and any(w in x for x in cv))
+    jd_l = (jd or '').lower()
     s += sum(1 for x in list(cv)[:20] if x in jd_l)
-    total = len(tags)*2 + len(jt.split()) + 20
-    return max(10, min(99, int((s/max(total,1))*100)))
+
+    # When no tags or title exist, weight the jd-skill match more heavily
+    has_meta = bool(tags) or bool(jt and jt.strip())
+    if not has_meta:
+        # Fall back to jd-text-only scoring, baseline is 35 not 10
+        if jd_l:
+            jd_hit_count = sum(1 for x in list(cv)[:20] if x in jd_l)
+            return max(35, min(99, 35 + jd_hit_count * 5))
+        return 35  # no metadata AND no jd text — neutral score
+
+    total = len(tags) * 2 + len((jt or '').split()) + 20
+    return max(10, min(99, int((s / max(total, 1)) * 100)))
 
 
 def smart_queries(cv_data):
@@ -293,8 +314,6 @@ def smart_queries(cv_data):
             seen.add(x.lower()); uniq.append(x)
     return uniq[:6] or ['Software Developer']
 
-
-import re
 
 # ─────────────────────────────────────────────
 # WELCOME
@@ -324,7 +343,15 @@ def show_welcome():
 
     st.markdown("<br/>", unsafe_allow_html=True)
     if not _llm_ok():
-        st.warning("⚠️ **Groq API key not set** — AI features use basic fallback. Add `GROQ_API_KEY` to `.streamlit/secrets.toml`")
+        st.warning(
+            "⚠️ **AI features are disabled** — Groq API key not configured.\n\n"
+            "**Get your free key in 60 seconds:** → [console.groq.com](https://console.groq.com) "
+            "→ Sign up free → API Keys → Create Key\n\n"
+            "**To enable:** Add `GROQ_API_KEY = \"your_key_here\"` to `.streamlit/secrets.toml` "
+            "or to your `.env` file, then restart the app.\n\n"
+            "Without a key: CV parsing uses regex fallback (limited quality), "
+            "ATS analysis, cover letters, and interview prep are unavailable."
+        )
     else:
         st.success("✅ AI engine ready (Groq LLaMA 3)")
     st.info("👈 **Two ways to start:**  \n1️⃣ Upload CV + optionally add GitHub/LinkedIn  \n2️⃣ Only paste GitHub/LinkedIn URL — CV will be generated automatically!")
@@ -468,16 +495,21 @@ def main():
                     except Exception as e:
                         st.write(f"   ⚠️ GitHub fetch failed: {e}")
 
-                # Step 2: Fetch LinkedIn silently
+                # Step 2: Fetch LinkedIn (BUG 4 FIX: LinkedIn blocks scraping, inform user honestly)
                 if linkedin_input.strip():
-                    st.write("🔗 Fetching LinkedIn profile…")
+                    st.write("🔗 Checking LinkedIn profile…")
                     try:
                         from utils import get_linkedin_data
                         li_data = get_linkedin_data(linkedin_input.strip())
-                        li_got  = [k for k in ['name','headline','location','about'] if li_data.get(k)]
-                        st.write(f"   ✅ LinkedIn: found {', '.join(li_got) if li_got else 'limited data (public profile only)'}")
+                        if li_data.get('_blocked'):
+                            st.write("   ℹ️ LinkedIn: Platform blocks automated access. Your LinkedIn URL has been saved. To enrich your CV with LinkedIn data, paste your 'About' section in the Extra Info field below.")
+                            li_data = {}  # clear so downstream merge doesn't try to use blocked data
+                        else:
+                            li_got = [k for k in ['name','headline','location','about'] if li_data.get(k)]
+                            st.write(f"   ✅ LinkedIn: found {', '.join(li_got) if li_got else 'profile URL saved'}")
                     except Exception as e:
-                        st.write(f"   ⚠️ LinkedIn fetch failed: {e}")
+                        st.write(f"   ⚠️ LinkedIn: {e}")
+                        li_data = {}
 
                 # Step 3: Build cv_data by merging all sources — priority: LinkedIn > GitHub > manual
                 st.write("🤖 Building CV from fetched data + AI…")
@@ -654,6 +686,8 @@ def main():
                 st.session_state.cv_pdf = None
                 st.session_state.last_template = cv_template
 
+            # BUG 2 FIX: save resolved job_text to session_state so all tabs can use it
+            st.session_state['resolved_job_text'] = job_text
             status.update(label="✅ Ready!", state="complete", expanded=False)
 
     cv_data     = st.session_state.cv_data
@@ -668,10 +702,8 @@ def main():
           ✅ <strong>Enriched with external data:</strong> {' + '.join(enrich_done)} data successfully integrated into your CV and Portfolio
         </div>""", unsafe_allow_html=True)
 
-    # Job text for tabs
-    job_text = None
-    if job_text_input.strip():
-        job_text = job_text_input.strip()
+    # Job text for tabs - BUG 2 FIX: read from session_state (covers file/url inputs too)
+    job_text = st.session_state.get('resolved_job_text') or (job_text_input.strip() if job_text_input.strip() else None)
 
     # ── TABS ──
     has_ats = bool(ats_results)
@@ -736,6 +768,15 @@ def main():
             with st.spinner("Generating CV…"):
                 try:
                     tmpl = st.session_state.get('last_template','Modern')
+                    # BUG 5 FIX: Pre-generate summary here (with spinner feedback) and
+                    # pass it into cv_data so PDF generation doesn't make a hidden LLM call
+                    if _llm_ok() and not cv_data.get('_pre_generated_summary'):
+                        try:
+                            from llm_utils import generate_summary_llm
+                            cv_data = dict(cv_data)  # don't mutate session state directly
+                            cv_data['_pre_generated_summary'] = generate_summary_llm(cv_data, job_text)
+                        except Exception:
+                            pass  # fallback in utils will handle it
                     st.session_state.cv_pdf = generate_optimized_cv(cv_data, job_text, template=tmpl)
                 except Exception as e:
                     st.error(f"CV error: {e}")
@@ -979,12 +1020,32 @@ Sincerely,
             labels = ['cold_email','follow_up_1','follow_up_2','thank_you']
             for etab, key in zip(e_tabs, labels):
                 with etab:
-                    content = emails.get(key, '')
-                    if content:
-                        st.text_area("Edit before sending →", value=content, height=320, label_visibility="collapsed", key=f"email_{key}")
+                    email_data = emails.get(key, '')
+                    # BUG 10 FIX: Handle both new dict format {subject, body} and
+                    # legacy flat-string format from fallback/old sessions
+                    if isinstance(email_data, dict):
+                        subject = email_data.get('subject', '')
+                        body    = email_data.get('body', '')
+                        flat_content = f"Subject: {subject}\n\n{body}" if subject else body
+                    else:
+                        flat_content = email_data or ''
+                        # Parse subject out of flat string for subject field
+                        if flat_content.startswith('Subject:'):
+                            lines = flat_content.split('\n', 1)
+                            subject = lines[0].replace('Subject:', '').strip()
+                            body = lines[1].strip() if len(lines) > 1 else ''
+                        else:
+                            subject = ''
+                            body = flat_content
+
+                    if flat_content:
+                        if subject:
+                            st.text_input("Subject line", value=subject, key=f"subj_{key}")
+                        st.text_area("Email body — edit before sending →", value=body if subject else flat_content,
+                                     height=300, label_visibility="collapsed", key=f"email_{key}")
                         st.download_button(
                             f"⬇️ Download {key.replace('_',' ').title()}",
-                            data=content,
+                            data=flat_content,
                             file_name=f"{key}.txt",
                             mime="text/plain",
                             use_container_width=True,
