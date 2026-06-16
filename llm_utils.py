@@ -26,14 +26,21 @@ def _get_groq_key() -> Optional[str]:
     return os.environ.get("GROQ_API_KEY")
 
 
-def _groq_call(messages: list, max_tokens: int = 1200, temperature: float = 0.4) -> str:
+# BUG 9 FIX: Use llama-3.3-70b-versatile for structured JSON outputs (more reliable)
+# and llama-3.1-8b-instant only for fast freetext generation (cover letters, summaries)
+_FAST_MODEL = "llama-3.1-8b-instant"        # freetext: summaries, cover letters, interview q
+_SMART_MODEL = "llama-3.3-70b-versatile"    # structured JSON: ATS analysis, HR emails, roadmap
+
+def _groq_call(messages: list, max_tokens: int = 1200, temperature: float = 0.4,
+               use_smart_model: bool = False) -> str:
     key = _get_groq_key()
     if not key:
         raise Exception("GROQ_API_KEY not configured")
     from groq import Groq
     client = Groq(api_key=key)
+    model = _SMART_MODEL if use_smart_model else _FAST_MODEL
     response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model=model,
         messages=messages,
         max_tokens=max_tokens,
         temperature=temperature,
@@ -42,10 +49,30 @@ def _groq_call(messages: list, max_tokens: int = 1200, temperature: float = 0.4)
 
 
 def _parse_json(raw: str):
+    """Parse LLM JSON output with robust cleanup and truncation detection."""
     raw = re.sub(r'^```json\s*', '', raw.strip())
     raw = re.sub(r'\s*```$', '', raw.strip())
     raw = re.sub(r'^```\s*', '', raw.strip())
-    return json.loads(raw)
+    raw = raw.strip()
+
+    # BUG 9 FIX: Detect truncated JSON (model hit token limit mid-output)
+    # A truncated JSON won't end with } or ] — try to repair it
+    if raw and raw[-1] not in ('}', ']', '"', '0123456789'):
+        # Try to close open braces/brackets to salvage partial JSON
+        open_braces = raw.count('{') - raw.count('}')
+        open_brackets = raw.count('[') - raw.count(']')
+        raw = raw.rstrip(', \n\t')
+        raw += ']' * open_brackets + '}' * open_braces
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        # Last resort: try ast.literal_eval for Python-style dicts
+        import ast
+        try:
+            return ast.literal_eval(raw)
+        except Exception:
+            raise json.JSONDecodeError(f"JSON parse failed after repair attempt: {e}", raw, 0)
 
 
 def extract_cv_data_llm(text: str) -> Dict:
@@ -79,7 +106,7 @@ JSON structure:
 
 Return ONLY JSON."""
     try:
-        raw = _groq_call([{"role":"user","content":prompt}], max_tokens=1800)
+        raw = _groq_call([{"role":"user","content":prompt}], max_tokens=1800, use_smart_model=True)
         return _parse_json(raw)
     except Exception as e:
         raise Exception(f"CV extraction failed: {e}")
@@ -108,7 +135,7 @@ Return ONLY valid JSON:
 
 Score 0-100 based on keyword match + semantic relevance. Return ONLY JSON."""
     try:
-        raw = _groq_call([{"role":"user","content":prompt}], max_tokens=900)
+        raw = _groq_call([{"role":"user","content":prompt}], max_tokens=900, use_smart_model=True)
         return _parse_json(raw)
     except Exception as e:
         raise Exception(f"ATS analysis failed: {e}")
@@ -309,7 +336,7 @@ Rules:
 - Return ONLY JSON"""
 
     try:
-        raw = _groq_call([{"role": "user", "content": prompt}], max_tokens=1200, temperature=0.5)
+        raw = _groq_call([{"role": "user", "content": prompt}], max_tokens=1200, temperature=0.5, use_smart_model=True)
         return _parse_json(raw)
     except Exception as e:
         raise Exception(f"GitHub enrichment failed: {e}")
@@ -364,17 +391,30 @@ Email guidelines:
 Return ONLY JSON."""
 
     try:
-        raw = _groq_call([{"role":"user","content":prompt}], max_tokens=2000, temperature=0.6)
+        raw = _groq_call([{"role":"user","content":prompt}], max_tokens=2000, temperature=0.6, use_smart_model=True)
         data = _parse_json(raw)
         # Flatten subject+body into single string for each
+        # BUG 10 FIX: Keep subject+body as separate dict fields so the UI
+        # can render them in separate inputs (subject line vs body text area).
+        # Old code flattened them into one string, making copy-paste to Gmail messy.
         result = {}
         for key in ['cold_email','follow_up_1','follow_up_2','thank_you']:
             if key in data and isinstance(data[key], dict):
-                subject = data[key].get('subject','')
-                body    = data[key].get('body','')
-                result[key] = f"Subject: {subject}\n\n{body}"
-            elif key in data:
-                result[key] = data[key]
+                result[key] = {
+                    'subject': data[key].get('subject', ''),
+                    'body':    data[key].get('body', ''),
+                }
+            elif key in data and isinstance(data[key], str):
+                # Handle flat string from LLM (extract subject if present)
+                raw_val = data[key]
+                if raw_val.startswith('Subject:'):
+                    lines = raw_val.split('\n', 1)
+                    result[key] = {
+                        'subject': lines[0].replace('Subject:', '').strip(),
+                        'body': lines[1].strip() if len(lines) > 1 else '',
+                    }
+                else:
+                    result[key] = {'subject': '', 'body': raw_val}
         return result
     except Exception as e:
         raise Exception(f"HR email generation failed: {e}")
