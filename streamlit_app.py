@@ -25,7 +25,7 @@ st.set_page_config(
     page_title="CareerBoost AI",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
 st.markdown("""
@@ -33,6 +33,10 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600&display=swap');
 *,*::before,*::after{box-sizing:border-box;}
 #MainMenu,footer,header{display:none!important;}
+/* ── MOBILE SIDEBAR FIX ── */
+[data-testid="collapsedControl"]{display:flex!important;visibility:visible!important;opacity:1!important;background:rgba(124,106,247,.15)!important;border:1px solid rgba(124,106,247,.4)!important;border-radius:8px!important;padding:4px!important;}
+[data-testid="collapsedControl"] svg{fill:#a5b4fc!important;}
+@media(max-width:768px){section[data-testid="stSidebar"]{min-width:88vw!important;}[data-testid="stSidebarContent"]{padding:1rem!important;}.stButton button{font-size:.85rem!important;}}
 .block-container{padding-top:1.5rem!important;}
 :root{
   --bg:#0a0a0f; --surface:#111118; --card:#16161f;
