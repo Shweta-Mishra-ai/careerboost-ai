@@ -1,25 +1,53 @@
-# Environment variables — NEVER commit secrets
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# Streamlit secrets — NEVER commit real secrets
+.streamlit/secrets.toml
+
+# Environment files
 .env
 .env.local
 .env.*.local
 
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-venv/
-.venv/
-env/
-ENV/
-*.egg-info/
-dist/
-build/
+# Logs — never commit logs
+server_logs.txt
+*.log
+logs/
 
-# Streamlit
-.streamlit/secrets.toml
-
-# OS
+# OS files
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary
+tmp/
+temp/
