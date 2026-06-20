@@ -44,7 +44,15 @@ def parse_pdf(file) -> str:
 
 def parse_docx(file) -> str:
     try:
-        d = docx.Document(file)
+        # HIDDEN BUG FIX: Streamlit UploadedFile needs BytesIO
+        # docx.Document() fails on Streamlit file objects in some versions
+        if hasattr(file, 'read'):
+            raw = file.read()
+            if isinstance(raw, str):
+                raw = raw.encode('utf-8')
+            d = docx.Document(io.BytesIO(raw))
+        else:
+            d = docx.Document(file)
         return "\n".join(p.text for p in d.paragraphs).strip()
     except Exception as e:
         raise Exception(f"DOCX parse error: {e}")
@@ -179,11 +187,27 @@ SKILL_KEYWORDS = [
 
 def _extract_skills(text):
     lower = text.lower()
+    # HIDDEN BUG FIX: kw.title() mangles tech names:
+    # "vue.js" -> "Vue.Js", "node.js" -> "Node.Js", "c++" -> "C++", ".net" -> ".Net"
+    # Use a proper display map instead
+    DISPLAY = {
+        'vue.js':'Vue.js','node.js':'Node.js','next.js':'Next.js',
+        'nuxt':'Nuxt.js','express':'Express.js','tailwind css':'Tailwind CSS',
+        '.net':'.NET','c++':'C++','c#':'C#','graphql':'GraphQL',
+        'grpc':'gRPC','websocket':'WebSocket','rest api':'REST API',
+        'ci/cd':'CI/CD','ui/ux':'UI/UX','adobe xd':'Adobe XD',
+        'material ui':'Material UI','power bi':'Power BI','sql':'SQL',
+        'aws':'AWS','gcp':'GCP','linux':'Linux','bash':'Bash',
+        'nlp':'NLP','rag':'RAG','llm':'LLM',
+        'github actions':'GitHub Actions','gitlab ci':'GitLab CI',
+        'react native':'React Native',
+    }
     seen, result = set(), []
     for kw in SKILL_KEYWORDS:
         if kw in lower and kw not in seen:
             seen.add(kw)
-            result.append(kw.title())
+            display = DISPLAY.get(kw, kw.title())
+            result.append(display)
     return sorted(result)
 
 
@@ -284,7 +308,11 @@ def get_github_data(github_url: str) -> Dict:
     if not match:
         return {}
     username = match.group(1).strip()
-    headers = {'Accept': 'application/vnd.github.v3+json'}
+    headers = {
+        'Accept': 'application/vnd.github.v3+json',
+        # HIDDEN BUG FIX: GitHub returns 403 without User-Agent on some endpoints
+        'User-Agent': 'CareerBoost-AI/1.0 (github.com/Shweta-Mishra-ai/careerboost-ai)',
+    }
     data = {'username': username, 'projects': [], 'bio': '', 'languages': [], 'total_stars': 0}
 
     try:
@@ -383,9 +411,13 @@ def enrich_cv_with_external_data(cv_data: Dict, github_url: str = '', linkedin_u
         for gp in gh.get('projects', []):
             if gp['name'].lower() not in existing_proj:
                 enriched.setdefault('projects', []).append({
-                    'name': gp['name'], 'description': gp['description'],
-                    'url': gp['url'], 'language': gp.get('language',''),
-                    'stars': gp.get('stars',0), 'topics': gp.get('topics',[]),
+                    'name': gp['name'],
+                    # HIDDEN BUG FIX: use 'description' not empty string when desc is None
+                    'description': gp.get('description') or f"A {gp.get('language','') or 'GitHub'} project.",
+                    'url': gp.get('url',''),
+                    'language': gp.get('language',''),
+                    'stars': gp.get('stars', 0),
+                    'topics': gp.get('topics', []),
                 })
                 existing_proj.add(gp['name'].lower())
         enriched['github_stats'] = {
@@ -607,9 +639,13 @@ def _generate_tips(cv_data, missing, cv_lower):
 def generate_skills_roadmap(missing_skills, target_role=""):
     try:
         from llm_utils import generate_roadmap_llm
-        return generate_roadmap_llm(missing_skills, target_role)
+        result = generate_roadmap_llm(missing_skills, target_role)
+        if result and len(result) > 50:
+            return result
     except Exception:
         pass
+    # HIDDEN BUG FIX: was returning None on failure -> blank roadmap tab
+    # Now returns a useful fallback markdown
     db = {
         'python': {'weeks':'3-5','r':['Python.org','freeCodeCamp']},
         'react':  {'weeks':'3-4','r':['react.dev','freeCodeCamp React']},
@@ -795,12 +831,12 @@ def generate_optimized_cv(cv_data: Dict, job_description: str = None, template: 
             meta = []
             if plang:  meta.append(plang)
             if pstars: meta.append(f"★ {pstars}")
-            name_line = f"<b>{pname}</b>" + (f"  <font size='8' color='#{CM.hexval()[2:]}'>[{', '.join(meta)}]</font>" if meta else "")
+            name_line = f"<b>{pname}</b>" + (f"  <font size='8' color='#888888'>[{', '.join(meta)}]</font>" if meta else "")
             story.append(Paragraph(name_line, s_role))
             if pdesc:
                 story.append(Paragraph(f"• {pdesc[:200]}", s_bullet))
             if purl:
-                story.append(Paragraph(f"<font size='8' color='#{CA.hexval()[2:]}'>{purl.replace('https://','')}</font>", s_date))
+                story.append(Paragraph(f"<font size='8' color='#1a56db'>{purl.replace('https://','')}</font>", s_date))
             story.append(Spacer(1, 3))
 
     # ─ EDUCATION ─
@@ -960,11 +996,19 @@ Warm regards,
 {name}
 {email}"""
 
+    # HIDDEN BUG FIX: Return as {subject, body} dicts to match LLM output format
+    # Old code returned flat strings which caused KeyError in UI email renderer
+    def _split(s):
+        lines = s.split("\n", 1)
+        subj = lines[0].replace("Subject:","").strip()
+        body = lines[1].strip() if len(lines) > 1 else s
+        return {"subject": subj, "body": body}
+
     return {
-        'cold_email':  cold,
-        'follow_up_1': followup_1,
-        'follow_up_2': followup_2,
-        'thank_you':   thank_you,
+        "cold_email":  _split(cold),
+        "follow_up_1": _split(followup_1),
+        "follow_up_2": _split(followup_2),
+        "thank_you":   _split(thank_you),
     }
 
 
