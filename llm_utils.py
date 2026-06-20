@@ -79,7 +79,7 @@ def extract_cv_data_llm(text: str) -> Dict:
     prompt = f"""Extract structured data from this CV. Return ONLY valid JSON, no markdown, no explanation.
 
 CV TEXT:
-{text[:3500]}
+{text[:5000]}
 
 JSON structure:
 {{
@@ -106,7 +106,7 @@ JSON structure:
 
 Return ONLY JSON."""
     try:
-        raw = _groq_call([{"role":"user","content":prompt}], max_tokens=1800, use_smart_model=True)
+        raw = _groq_call([{"role":"user","content":prompt}], max_tokens=2500, use_smart_model=True)  # HIDDEN BUG FIX: 1800 too low for large CVs
         return _parse_json(raw)
     except Exception as e:
         raise Exception(f"CV extraction failed: {e}")
@@ -116,7 +116,7 @@ def analyze_ats_llm(cv_text: str, job_description: str) -> Dict:
     prompt = f"""You are an expert ATS analyzer. Analyze this CV against the job description.
 
 CV (first 2000 chars):
-{cv_text[:2000]}
+{cv_text[:3500]}
 
 JOB DESCRIPTION (first 1500 chars):
 {job_description[:1500]}
@@ -170,7 +170,7 @@ Rules:
 
 Return ONLY the summary text, no quotes."""
     try:
-        return _groq_call([{"role":"user","content":prompt}], max_tokens=200, temperature=0.6)
+        return _groq_call([{"role":"user","content":prompt}], max_tokens=350, temperature=0.6)  # HIDDEN BUG FIX: 200 too low, truncates summary mid-sentence
     except Exception:
         s = ', '.join(cv_data.get('skills',[])[:4]) or 'various technologies'
         t = cv_data.get('current_title','professional')
@@ -233,9 +233,17 @@ Mix: 3 Technical, 2 Behavioural, 2 Situational, 1 Cultural
 Make questions SPECIFIC to the JD tech stack and candidate background.
 Return ONLY the JSON array."""
     try:
-        raw = _groq_call([{"role":"user","content":prompt}], max_tokens=2000, temperature=0.5)
+        raw = _groq_call([{"role":"user","content":prompt}], max_tokens=2000,
+                         temperature=0.5, use_smart_model=True)
         data = _parse_json(raw)
-        return data if isinstance(data, list) else []
+        # HIDDEN BUG FIX: handle dict-wrapped list {"questions": [...]}
+        if isinstance(data, list):
+            return data[:10]
+        if isinstance(data, dict):
+            for key in ('questions', 'interview_questions', 'items', 'data'):
+                if isinstance(data.get(key), list):
+                    return data[key][:10]
+        return []
     except Exception as e:
         raise Exception(f"Interview prep failed: {e}")
 
@@ -253,9 +261,12 @@ Format as clean Markdown. For each skill include:
 Keep it motivating, practical, under 600 words.
 Return only Markdown."""
     try:
-        return _groq_call([{"role":"user","content":prompt}], max_tokens=900, temperature=0.5)
-    except Exception as e:
-        raise Exception(f"Roadmap failed: {e}")
+        result = _groq_call([{"role":"user","content":prompt}], max_tokens=900, temperature=0.5)
+        return result if result and len(result) > 20 else None
+    except Exception:
+        # HIDDEN BUG FIX: Don't raise — caller (generate_skills_roadmap) handles None
+        # and shows a useful fallback instead of crashing the roadmap tab
+        return None
 
 
 def generate_job_search_strategy_llm(cv_data: Dict, job_description: str, missing_skills: List[str]) -> str:
