@@ -242,37 +242,59 @@ def _llm_ok():
 
 def search_jobs_remotive(query, limit=12):
     import requests
+    from urllib.parse import quote
     try:
-        r = requests.get(f"https://remotive.com/api/remote-jobs?search={query.replace(' ','%20')}&limit={limit}", timeout=10)
+        url = f"https://remotive.com/api/remote-jobs?search={quote(query)}&limit={limit}"
+        r = requests.get(url, timeout=12, headers={'User-Agent':'CareerBoost-AI/1.0','Accept':'application/json'})
         if r.status_code == 200:
+            jobs = r.json().get('jobs', [])
             return [{
-                'title': j.get('title',''), 'company': j.get('company_name',''),
+                'title':    j.get('title',''),
+                'company':  j.get('company_name',''),
                 'location': j.get('candidate_required_location','Remote'),
-                'type': j.get('job_type',''), 'salary': j.get('salary',''),
-                'tags': j.get('tags',[]),
-                'description': re.sub(r'<[^>]+>','',j.get('description',''))[:400],
-                'url': j.get('url',''), 'posted': j.get('publication_date','')[:10],
-                'source': 'Remotive',
-            } for j in r.json().get('jobs',[])]
-    except: pass
+                'type':     j.get('job_type',''),
+                'salary':   j.get('salary',''),
+                'tags':     [t.lower() for t in (j.get('tags') or [])],
+                'description': re.sub(r'<[^>]+>','',j.get('description','') or '')[:500],
+                'url':      j.get('url',''),
+                'posted':   (j.get('publication_date') or '')[:10],
+                'source':   'Remotive',
+            } for j in jobs]
+        elif r.status_code == 429:
+            return [{'_error':'Remotive rate limited — try again in 60s'}]
+    except requests.exceptions.Timeout:
+        return [{'_error':'Remotive timed out — try again'}]
+    except Exception:
+        pass
     return []
 
 
-def search_jobs_jobicy(query, limit=8):
+def search_jobs_jobicy(query, limit=10):
     import requests
+    from urllib.parse import quote
     try:
-        r = requests.get(f"https://jobicy.com/api/v2/remote-jobs?count={limit}&tag={query.replace(' ','+')}", timeout=10)
+        url = f"https://jobicy.com/api/v2/remote-jobs?count={limit}&tag={quote(query)}"
+        r = requests.get(url, timeout=12, headers={'User-Agent':'CareerBoost-AI/1.0','Accept':'application/json'})
         if r.status_code == 200:
+            jobs = r.json().get('jobs', [])
             return [{
-                'title': j.get('jobTitle',''), 'company': j.get('companyName',''),
-                'location': 'Remote — ' + j.get('jobGeo','Worldwide'),
-                'type': j.get('jobType',''), 'salary': str(j.get('annualSalaryMin','') or ''),
-                'tags': j.get('jobIndustry',[]),
-                'description': re.sub(r'<[^>]+>','',j.get('jobDescription',''))[:400],
-                'url': j.get('url',''), 'posted': j.get('pubDate','')[:10],
-                'source': 'Jobicy',
-            } for j in r.json().get('jobs',[])]
-    except: pass
+                'title':    j.get('jobTitle',''),
+                'company':  j.get('companyName',''),
+                'location': 'Remote — ' + (j.get('jobGeo') or 'Worldwide'),
+                'type':     j.get('jobType',''),
+                'salary':   str(j.get('annualSalaryMin','') or ''),
+                'tags':     [t.lower() for t in (j.get('jobIndustry') or [])],
+                'description': re.sub(r'<[^>]+>','',j.get('jobDescription','') or '')[:500],
+                'url':      j.get('url',''),
+                'posted':   (j.get('pubDate') or '')[:10],
+                'source':   'Jobicy',
+            } for j in jobs]
+        elif r.status_code == 429:
+            return [{'_error':'Jobicy rate limited — try again in 60s'}]
+    except requests.exceptions.Timeout:
+        return [{'_error':'Jobicy timed out — try again'}]
+    except Exception:
+        pass
     return []
 
 
@@ -545,9 +567,26 @@ def main():
                     ).lower()
                     # Also scan LinkedIn about
                     all_proj_text += ' ' + bio.lower()
+                    # FIX: proper casing for tech names
+                    _SD = {
+                        'vue.js':'Vue.js','node.js':'Node.js','next.js':'Next.js',
+                        'nuxt':'Nuxt.js','express':'Express.js','tailwind css':'Tailwind CSS',
+                        '.net':'.NET','c++':'C++','c#':'C#','graphql':'GraphQL',
+                        'grpc':'gRPC','rest api':'REST API','ci/cd':'CI/CD',
+                        'aws':'AWS','gcp':'GCP','nlp':'NLP','rag':'RAG','llm':'LLM',
+                        'github actions':'GitHub Actions','react native':'React Native',
+                        'tensorflow':'TensorFlow','pytorch':'PyTorch','numpy':'NumPy',
+                        'pandas':'Pandas','postgresql':'PostgreSQL','mongodb':'MongoDB',
+                        'mysql':'MySQL','sqlite':'SQLite','redis':'Redis',
+                        'dynamodb':'DynamoDB','firebase':'Firebase','supabase':'Supabase',
+                        'fastapi':'FastAPI','kubernetes':'Kubernetes','terraform':'Terraform',
+                        'opencv':'OpenCV','scikit-learn':'Scikit-learn','sql':'SQL',
+                        'power bi':'Power BI','material ui':'Material UI',
+                    }
                     for kw in SKILL_KEYWORDS:
-                        if kw in all_proj_text and kw.title() not in skills:
-                            skills.append(kw.title())
+                        display = _SD.get(kw, kw.title())
+                        if kw in all_proj_text and display not in skills:
+                            skills.append(display)
 
                     cv_data = {
                         'name':             name,
@@ -919,12 +958,21 @@ Sincerely,
                 results = []
                 if job_source in ["Both","Remotive"]: results += search_jobs_remotive(job_query)
                 if job_source in ["Both","Jobicy"]:   results += search_jobs_jobicy(job_query)
+                # Handle API errors and filter them out
+                errors = [j['_error'] for j in results if '_error' in j]
+                results = [j for j in results if '_error' not in j]
+                for err in errors:
+                    st.warning(f"⚠️ {err}")
+
                 for j in results:
                     tags = j.get('tags',[])
                     j['match'] = match_score(cv_skills, tags, j.get('title',''), j.get('description',''))
                 results.sort(key=lambda x: x.get('match',0), reverse=True)
                 st.session_state.job_results = results
                 st.session_state.job_query = job_query
+
+                if not results and not errors:
+                    st.info("No jobs found. Try broader terms: 'Python', 'React', 'Data Science'")
 
         jobs = st.session_state.job_results or []
         if jobs:
