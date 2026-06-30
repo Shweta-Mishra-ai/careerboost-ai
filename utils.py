@@ -191,16 +191,31 @@ def _extract_skills(text):
     # "vue.js" -> "Vue.Js", "node.js" -> "Node.Js", "c++" -> "C++", ".net" -> ".Net"
     # Use a proper display map instead
     DISPLAY = {
+        # JS/Frontend
         'vue.js':'Vue.js','node.js':'Node.js','next.js':'Next.js',
         'nuxt':'Nuxt.js','express':'Express.js','tailwind css':'Tailwind CSS',
-        '.net':'.NET','c++':'C++','c#':'C#','graphql':'GraphQL',
-        'grpc':'gRPC','websocket':'WebSocket','rest api':'REST API',
-        'ci/cd':'CI/CD','ui/ux':'UI/UX','adobe xd':'Adobe XD',
-        'material ui':'Material UI','power bi':'Power BI','sql':'SQL',
-        'aws':'AWS','gcp':'GCP','linux':'Linux','bash':'Bash',
-        'nlp':'NLP','rag':'RAG','llm':'LLM',
+        'react native':'React Native','material ui':'Material UI',
+        'adobe xd':'Adobe XD','three.js':'Three.js','webgl':'WebGL',
+        # Languages
+        '.net':'.NET','c++':'C++','c#':'C#',
+        # APIs/Protocols
+        'graphql':'GraphQL','grpc':'gRPC','websocket':'WebSocket',
+        'rest api':'REST API',
+        # DevOps/Cloud
+        'ci/cd':'CI/CD','aws':'AWS','gcp':'GCP','linux':'Linux','bash':'Bash',
         'github actions':'GitHub Actions','gitlab ci':'GitLab CI',
-        'react native':'React Native',
+        # Data/AI — critical: these are all wrongly cased by .title()
+        'tensorflow':'TensorFlow','pytorch':'PyTorch','numpy':'NumPy',
+        'pandas':'Pandas','scikit-learn':'Scikit-learn','opencv':'OpenCV',
+        'postgresql':'PostgreSQL','mongodb':'MongoDB','mysql':'MySQL',
+        'sqlite':'SQLite','redis':'Redis','elasticsearch':'Elasticsearch',
+        'dynamodb':'DynamoDB','firebase':'Firebase','supabase':'Supabase',
+        # Concepts
+        'nlp':'NLP','rag':'RAG','llm':'LLM','ui/ux':'UI/UX',
+        'power bi':'Power BI','sql':'SQL',
+        # Misc
+        'fastapi':'FastAPI','django':'Django','flask':'Flask',
+        'kubernetes':'Kubernetes','terraform':'Terraform','ansible':'Ansible',
     }
     seen, result = set(), []
     for kw in SKILL_KEYWORDS:
@@ -1423,4 +1438,3 @@ Drag the unzipped folder to vercel.com/new → Deploy
         zf.writestr("HOW_TO_DEPLOY.md", deploy_readme)
     buf.seek(0)
     return buf.read()
-
