@@ -241,60 +241,119 @@ def _llm_ok():
 # ─────────────────────────────────────────────
 
 def search_jobs_remotive(query, limit=12):
+    """
+    Primary: Remotive API (best for remote tech jobs)
+    Fallback: Arbeitsagentur / Adzuna public API
+    """
     import requests
     from urllib.parse import quote
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+    }
+    # Try Remotive
     try:
         url = f"https://remotive.com/api/remote-jobs?search={quote(query)}&limit={limit}"
-        r = requests.get(url, timeout=12, headers={'User-Agent':'CareerBoost-AI/1.0','Accept':'application/json'})
+        r = requests.get(url, timeout=15, headers=headers)
         if r.status_code == 200:
             jobs = r.json().get('jobs', [])
-            return [{
-                'title':    j.get('title',''),
-                'company':  j.get('company_name',''),
-                'location': j.get('candidate_required_location','Remote'),
-                'type':     j.get('job_type',''),
-                'salary':   j.get('salary',''),
-                'tags':     [t.lower() for t in (j.get('tags') or [])],
-                'description': re.sub(r'<[^>]+>','',j.get('description','') or '')[:500],
-                'url':      j.get('url',''),
-                'posted':   (j.get('publication_date') or '')[:10],
-                'source':   'Remotive',
-            } for j in jobs]
-        elif r.status_code == 429:
-            return [{'_error':'Remotive rate limited — try again in 60s'}]
-    except requests.exceptions.Timeout:
-        return [{'_error':'Remotive timed out — try again'}]
+            if jobs:
+                return [{
+                    'title':    j.get('title',''),
+                    'company':  j.get('company_name',''),
+                    'location': j.get('candidate_required_location','Remote'),
+                    'type':     j.get('job_type',''),
+                    'salary':   j.get('salary',''),
+                    'tags':     [t.lower() for t in (j.get('tags') or [])],
+                    'description': re.sub(r'<[^>]+>','',j.get('description','') or '')[:500],
+                    'url':      j.get('url',''),
+                    'posted':   (j.get('publication_date') or '')[:10],
+                    'source':   'Remotive',
+                } for j in jobs]
     except Exception:
         pass
-    return []
+
+    # Fallback: Adzuna API (global, free, no key needed for basic)
+    try:
+        url = f"https://api.adzuna.com/v1/api/jobs/in/search/1?app_id=&app_key=&results_per_page={limit}&what={quote(query)}&content-type=application/json"
+        r = requests.get(url, timeout=15, headers=headers)
+        if r.status_code == 200:
+            jobs = r.json().get('results', [])
+            if jobs:
+                return [{
+                    'title':    j.get('title',''),
+                    'company':  j.get('company',{}).get('display_name',''),
+                    'location': j.get('location',{}).get('display_name','India'),
+                    'type':     'Full Time',
+                    'salary':   f"₹{j.get('salary_min','')}–{j.get('salary_max','')}" if j.get('salary_min') else '',
+                    'tags':     [],
+                    'description': j.get('description','')[:500],
+                    'url':      j.get('redirect_url',''),
+                    'posted':   (j.get('created','') or '')[:10],
+                    'source':   'Adzuna',
+                } for j in jobs]
+    except Exception:
+        pass
+
+    return [{'_error': 'Remotive unavailable right now — try again in a moment'}]
 
 
 def search_jobs_jobicy(query, limit=10):
+    """
+    Primary: Jobicy API
+    Fallback: The Muse API (free, no key, good quality)
+    """
     import requests
     from urllib.parse import quote
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+    }
+
+    # Try Jobicy
     try:
         url = f"https://jobicy.com/api/v2/remote-jobs?count={limit}&tag={quote(query)}"
-        r = requests.get(url, timeout=12, headers={'User-Agent':'CareerBoost-AI/1.0','Accept':'application/json'})
+        r = requests.get(url, timeout=15, headers=headers)
         if r.status_code == 200:
             jobs = r.json().get('jobs', [])
-            return [{
-                'title':    j.get('jobTitle',''),
-                'company':  j.get('companyName',''),
-                'location': 'Remote — ' + (j.get('jobGeo') or 'Worldwide'),
-                'type':     j.get('jobType',''),
-                'salary':   str(j.get('annualSalaryMin','') or ''),
-                'tags':     [t.lower() for t in (j.get('jobIndustry') or [])],
-                'description': re.sub(r'<[^>]+>','',j.get('jobDescription','') or '')[:500],
-                'url':      j.get('url',''),
-                'posted':   (j.get('pubDate') or '')[:10],
-                'source':   'Jobicy',
-            } for j in jobs]
-        elif r.status_code == 429:
-            return [{'_error':'Jobicy rate limited — try again in 60s'}]
-    except requests.exceptions.Timeout:
-        return [{'_error':'Jobicy timed out — try again'}]
+            if jobs:
+                return [{
+                    'title':    j.get('jobTitle',''),
+                    'company':  j.get('companyName',''),
+                    'location': 'Remote — ' + (j.get('jobGeo') or 'Worldwide'),
+                    'type':     j.get('jobType',''),
+                    'salary':   str(j.get('annualSalaryMin','') or ''),
+                    'tags':     [t.lower() for t in (j.get('jobIndustry') or [])],
+                    'description': re.sub(r'<[^>]+>','',j.get('jobDescription','') or '')[:500],
+                    'url':      j.get('url',''),
+                    'posted':   (j.get('pubDate') or '')[:10],
+                    'source':   'Jobicy',
+                } for j in jobs]
     except Exception:
         pass
+
+    # Fallback: The Muse API (free, no key needed)
+    try:
+        url = f"https://www.themuse.com/api/public/jobs?descending=true&page=1&api_key=&category={quote(query)}"
+        r = requests.get(url, timeout=15, headers=headers)
+        if r.status_code == 200:
+            jobs = r.json().get('results', [])
+            if jobs:
+                return [{
+                    'title':    j.get('name',''),
+                    'company':  j.get('company',{}).get('name',''),
+                    'location': ', '.join(loc.get('name','Remote') for loc in j.get('locations',[{'name':'Remote'}])[:1]),
+                    'type':     j.get('type','Full Time'),
+                    'salary':   '',
+                    'tags':     [c.get('name','').lower() for c in j.get('categories',[])[:3]],
+                    'description': re.sub(r'<[^>]+>','',j.get('contents','') or '')[:500],
+                    'url':      j.get('refs',{}).get('landing_page',''),
+                    'posted':   (j.get('publication_date','') or '')[:10],
+                    'source':   'The Muse',
+                } for j in jobs[:limit]]
+    except Exception:
+        pass
+
     return []
 
 
